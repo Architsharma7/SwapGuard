@@ -47,9 +47,6 @@ contract IRSServiceManager is
     uint256 public constant SETTLEMENT_PERIOD = 30 days;
 
     // STATE
-    uint32 public latestTaskNum;
-    mapping(uint32 => bytes32) public allTaskHashes;
-    mapping(uint32 => bytes32) public allTaskResponses;
     mapping(uint256 => Swap) public swaps;
     uint256 public nextSwapId;
 
@@ -77,7 +74,8 @@ contract IRSServiceManager is
         IAVSDirectory __avsDirectory,
         IRewardsCoordinator __rewardsCoordinator,
         IRegistryCoordinator __registryCoordinator,
-        IStakeRegistry __stakeRegistry
+        IStakeRegistry __stakeRegistry,
+        uint32 __taskResponseWindowBlock
     )
         ServiceManagerBase(
             __avsDirectory,
