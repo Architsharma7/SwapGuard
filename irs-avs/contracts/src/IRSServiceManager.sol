@@ -11,13 +11,12 @@ import {IPauserRegistry} from "@eigenlayer/contracts/interfaces/IPauserRegistry.
 import {IStakeRegistry} from "@eigenlayer-middleware/src/interfaces/IStakeRegistry.sol";
 import {IRegistryCoordinator} from "@eigenlayer-middleware/src/interfaces/IRegistryCoordinator.sol";
 
-contract IRSManager is
+contract IRSServiceManager is
     ServiceManagerBase,
     TaskManager,
     Pausable,
     OperatorAllowlist
 {
-    // TYPES
     enum TaskType {
         SWAP_VALIDATION,
         RATE_AND_SETTLEMENT
@@ -75,19 +74,18 @@ contract IRSManager is
     );
 
     constructor(
-        IAVSDirectory _avsDirectory,
-        IRewardsCoordinator _rewardsCoordinator,
-        IRegistryCoordinator _registryCoordinator,
-        IStakeRegistry _stakeRegistry,
-        uint32 _taskResponseWindowBlock
+        IAVSDirectory __avsDirectory,
+        IRewardsCoordinator __rewardsCoordinator,
+        IRegistryCoordinator __registryCoordinator,
+        IStakeRegistry __stakeRegistry
     )
         ServiceManagerBase(
-            _avsDirectory,
-            _rewardsCoordinator,
-            _registryCoordinator,
-            _stakeRegistry
+            __avsDirectory,
+            __rewardsCoordinator,
+            __registryCoordinator,
+            __stakeRegistry
         )
-        TaskManager(_registryCoordinator, _taskResponseWindowBlock)
+        TaskManager(__registryCoordinator, __taskResponseWindowBlock)
     {
         _disableInitializers();
     }
@@ -134,22 +132,14 @@ contract IRSManager is
             )
         );
 
-        emit NewTaskCreated(
-            latestTaskNum++,
-            Task({
-                taskCreatedBlock: uint32(block.number),
-                quorumThresholdPercentage: quorumThresholdPercentage,
-                message: message,
-                quorumNumbers: quorumNumbers
-            })
-        );
+        _createNewTask(message, quorumThresholdPercentage, quorumNumbers);
     }
 
     function respondToTask(
         Task calldata task,
         TaskResponse calldata taskResponse,
         NonSignerStakesAndSignature memory nonSignerStakesAndSignature
-    ) external whenNotPaused {
+    ) external onlyAggregator whenNotPaused {
         // Verify task matches
         if (
             keccak256(abi.encode(task)) !=
