@@ -1,0 +1,3 @@
+[submodule "irs-avs/contracts/lib/eigenlayer-middleware"]
+	path = irs-avs/contracts/lib/eigenlayer-middleware
+	url = https://github.com/Layr-Labs/eigenlayer-middleware
