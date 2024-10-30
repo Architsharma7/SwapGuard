@@ -6631,7 +6631,7 @@ contract IRSServiceManager is
         IRewardsCoordinator __rewardsCoordinator,
         IRegistryCoordinator __registryCoordinator,
         IStakeRegistry __stakeRegistry,
-        uint32 __taskResponseWindowBlock
+        uint32 _taskResponseWindowBlock
     )
         ServiceManagerBase(
             __avsDirectory,
@@ -6639,21 +6639,24 @@ contract IRSServiceManager is
             __registryCoordinator,
             __stakeRegistry
         )
-        TaskManager(__registryCoordinator, __taskResponseWindowBlock)
+        TaskManager(__registryCoordinator, _taskResponseWindowBlock)
     {
         _disableInitializers();
     }
 
     function initialize(
-        IPauserRegistry _pauserRegistry,
-        uint256 _initialPausedStatus,
-        address _initialOwner,
-        address _aggregator,
-        address _generator
+        IPauserRegistry pauserRegistry_,
+        uint256 initialPausedStatus_,
+        address initialOwner_,
+        address rewardsInitiator_,
+        address allowlistManager_,
+        address aggregator_,
+        address generator_
     ) external initializer {
-        _initializePauser(_pauserRegistry, _initialPausedStatus);
-        __ServiceManagerBase_init(_initialOwner, _generator);
-        __TaskManager_init(_aggregator, _generator, _initialOwner);
+        _initializePauser(pauserRegistry_, initialPausedStatus_);
+        __ServiceManagerBase_init(initialOwner_, rewardsInitiator_);
+        __OperatorAllowlist_init(allowlistManager_, true);
+        __TaskManager_init(aggregator_, generator_, initialOwner_);
     }
 
     function createTask(
