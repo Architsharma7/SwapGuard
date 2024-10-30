@@ -103,6 +103,11 @@ contract IRSServiceManager is
             ECDSAStakeRegistry(stakeRegistry).operatorRegistered(msg.sender),
             "Operator must be the caller"
         );
+
+        require(
+            operatorHasMinimumWeight(msg.sender),
+            "Operator does not meet minimum weight requirement"
+        );
         _;
     }
 
@@ -294,6 +299,14 @@ contract IRSServiceManager is
         return
             (notional * rateDiff * timeElapsed) /
             (365 days * BASIS_POINTS_DIVISOR);
+    }
+
+    function operatorHasMinimumWeight(
+        address operator
+    ) public view returns (bool) {
+        return
+            ECDSAStakeRegistry(stakeRegistry).getOperatorWeight(operator) >=
+            ECDSAStakeRegistry(stakeRegistry).minimumWeight();
     }
 
     receive() external payable {}

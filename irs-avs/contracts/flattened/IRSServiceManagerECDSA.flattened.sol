@@ -5547,7 +5547,7 @@ abstract contract ECDSAServiceManagerBase is
     uint256[49] private __GAP;
 }
 
-// src/IRSServiceManager2.sol
+// src/IRSServiceManagerECDSA.sol
 
 contract IRSServiceManager is
     ECDSAServiceManagerBase,
@@ -5644,6 +5644,11 @@ contract IRSServiceManager is
         require(
             ECDSAStakeRegistry(stakeRegistry).operatorRegistered(msg.sender),
             "Operator must be the caller"
+        );
+
+        require(
+            operatorHasMinimumWeight(msg.sender),
+            "Operator does not meet minimum weight requirement"
         );
         _;
     }
@@ -5767,7 +5772,6 @@ contract IRSServiceManager is
         }
     }
 
-    // Rest of the contract (settleSwap, calculatePayment) remains same...
     function settleSwap(uint256 swapId, uint256 validatedRate) internal {
         Swap storage swap = swaps[swapId];
         require(swap.isActive && swap.matched, "Invalid swap");
@@ -5837,6 +5841,14 @@ contract IRSServiceManager is
         return
             (notional * rateDiff * timeElapsed) /
             (365 days * BASIS_POINTS_DIVISOR);
+    }
+
+    function operatorHasMinimumWeight(
+        address operator
+    ) public view returns (bool) {
+        return
+            ECDSAStakeRegistry(stakeRegistry).getOperatorWeight(operator) >=
+            ECDSAStakeRegistry(stakeRegistry).minimumWeight();
     }
 
     receive() external payable {}
