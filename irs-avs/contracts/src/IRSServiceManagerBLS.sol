@@ -121,18 +121,6 @@ contract IRSServiceManager is
             if (msg.value < requiredMargin) revert InsufficientMargin();
         }
 
-        // Store task hash
-        allTaskHashes[latestTaskNum] = keccak256(
-            abi.encode(
-                Task({
-                    taskCreatedBlock: uint32(block.number),
-                    quorumThresholdPercentage: quorumThresholdPercentage,
-                    message: message,
-                    quorumNumbers: quorumNumbers
-                })
-            )
-        );
-
         _createNewTask(message, quorumThresholdPercentage, quorumNumbers);
     }
 
