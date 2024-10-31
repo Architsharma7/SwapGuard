@@ -59,9 +59,8 @@ const createSwap = async () => {
     });
 
     const swapData1 = ethers.AbiCoder.defaultAbiCoder().encode(
-      ["uint8", "address", "uint256", "uint256", "bool", "uint256", "uint256"],
+      ["address", "uint256", "uint256", "bool", "uint256", "uint256"],
       [
-        TaskType.SWAP_VALIDATION,
         wallet1.address,
         notionalAmount,
         fixedRate,
@@ -71,14 +70,10 @@ const createSwap = async () => {
       ]
     );
 
-    console.log(fixedRate, duration, margin);
-
     let tx = await irsManager1.createNewTask(
       TaskType.SWAP_VALIDATION,
       swapData1,
-      {
-        value: margin,
-      }
+      { value: margin }
     );
     await tx.wait();
     console.log("Wallet1 swap request submitted");
@@ -100,9 +95,8 @@ const createSwap = async () => {
     });
 
     const swapData2 = ethers.AbiCoder.defaultAbiCoder().encode(
-      ["uint8", "address", "uint256", "uint256", "bool", "uint256", "uint256"],
+      ["address", "uint256", "uint256", "bool", "uint256", "uint256"],
       [
-        TaskType.SWAP_VALIDATION,
         wallet2.address,
         notionalAmount,
         fixedRate,
@@ -112,14 +106,9 @@ const createSwap = async () => {
       ]
     );
 
-    tx = await irsManager2.createNewTask(
-      swapData2,
-      66,
-      "0x0000000000000000000000000000000000000000",
-      {
-        value: margin,
-      }
-    );
+    tx = await irsManager2.createNewTask(TaskType.SWAP_VALIDATION, swapData2, {
+      value: margin,
+    });
     await tx.wait();
     console.log("Wallet2 swap request submitted");
 
