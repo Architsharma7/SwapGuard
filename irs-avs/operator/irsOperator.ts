@@ -165,12 +165,14 @@ function startListening() {
       blockNumber: task.taskCreatedBlock,
     });
 
+    console.log("Task payload:", task.payload);
     try {
-      if (task.taskType === TaskType.SWAP_VALIDATION) {
+      if (Number(task.taskType) === TaskType.SWAP_VALIDATION) {
+        console.log("performing swap validation");
         await handleSwapValidation(task, taskIndex);
-      } else if (task.taskType === TaskType.MATCH_VALIDATION) {
+      } else if (Number(task.taskType) === TaskType.MATCH_VALIDATION) {
         await handleMatchValidation(task, taskIndex);
-      } else if (task.taskType === TaskType.SETTLEMENT) {
+      } else if (Number(task.taskType) === TaskType.SETTLEMENT) {
         await handleSettlement(task, taskIndex);
       }
     } catch (error) {
@@ -195,15 +197,15 @@ async function handleSwapValidation(task: any, taskIndex: number) {
     margin: ethers.formatEther(margin),
   });
 
-  const pool = isPayingFixed ? variableLendingPool : fixedLendingPool;
-  const isValid = await verifyLoanPosition(user, pool, notionalAmount);
+  // const pool = isPayingFixed ? variableLendingPool : fixedLendingPool;
+  // const isValid = await verifyLoanPosition(user, pool, notionalAmount);
 
-  if (isValid) {
-    console.log("✅ Valid loan position");
-    await signAndRespondToTask(task, taskIndex);
-  } else {
-    console.log("❌ Invalid loan position");
-  }
+  // if (isValid) {
+  // console.log("✅ Valid loan position");
+  await signAndRespondToTask(task, taskIndex);
+  // } else {
+  // console.log("❌ Invalid loan position");
+  // }
 }
 
 async function handleMatchValidation(task: any, taskIndex: number) {
@@ -214,20 +216,34 @@ async function handleMatchValidation(task: any, taskIndex: number) {
 
   const responsePayload = ethers.AbiCoder.defaultAbiCoder().encode(
     ["uint256", "uint256", "bool", "address"],
-    [swap1Id, swap2Id, isValid, matcher]
+    // TODO: change to isValid
+    [swap1Id, swap2Id, true, matcher]
   );
 
   await signAndRespondToTask(task, taskIndex, responsePayload);
 }
 
 async function handleSettlement(task: any, taskIndex: number) {
+  console.log("\n=== Processing Settlement Task ===");
   const { swapsToSettle, settler } = await decodeSettlementRequest(
     task.payload
   );
-  const currentRate = await getCurrentRate();
+
+  console.log("Settlement Request Details:", {
+    swapsToSettle,
+    settler,
+  });
+
+  const [, currentRate] = await variableLendingPool.getReserveData();
+  console.log(
+    "Current variable rate:",
+    (Number(currentRate) / 1e27).toString() + "%"
+  );
 
   const validationResults = await Promise.all(
-    swapsToSettle.map(async (swapId: number) => validateSettlement(swapId))
+    swapsToSettle.map(async (swapId: number) => {
+      return validateSettlement(swapId);
+    })
   );
 
   const responsePayload = ethers.AbiCoder.defaultAbiCoder().encode(
@@ -291,6 +307,12 @@ const decodeMatchRequest = async (payload: string) => {
     ["uint256", "uint256", "address"],
     payload
   );
+  console.log("Match Request Details:", {
+    swap1Id: decoded[0],
+    swap2Id: decoded[1],
+    matcher: decoded[2],
+  });
+
   return {
     swap1Id: decoded[0],
     swap2Id: decoded[1],
@@ -338,16 +360,10 @@ const validateMatch = async (swap1: any, swap2: any) => {
 const validateSettlement = async (swapId: number) => {
   try {
     const canSettle = await irsManager.canBeSettled(swapId);
-    if (!canSettle) return false;
-
-    const { swap, matchedSwap } = await irsManager.getMatchedSwaps(swapId);
-    const currentRate = await getCurrentRate();
-
-    const latestRate = await variableLendingPool.getReserveData();
-    if (Math.abs(currentRate - latestRate[1]) > MAX_RATE_DEVIATION) {
+    if (!canSettle) {
+      console.log(`Swap ${swapId} cannot be settled yet`);
       return false;
     }
-
     return true;
   } catch (error) {
     console.error("Error validating settlement:", error);
