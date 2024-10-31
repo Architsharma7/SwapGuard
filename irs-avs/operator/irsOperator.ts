@@ -8,7 +8,7 @@ if (!Object.keys(process.env).length) {
   throw new Error("process.env object is empty");
 }
 
-enum TaskType {
+export enum TaskType {
   SWAP_VALIDATION,
   RATE_AND_SETTLEMENT,
 }
@@ -21,7 +21,7 @@ const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
 let chainId = 31337;
 
-const avsDeploymentData = JSON.parse(
+export const avsDeploymentData = JSON.parse(
   fs.readFileSync(
     path.resolve(__dirname, `../contracts/deployments/irs-avs/${chainId}.json`),
     "utf8"
@@ -38,9 +38,9 @@ const delegationManagerAddress = coreDeploymentData.addresses.delegation;
 const avsDirectoryAddress = coreDeploymentData.addresses.avsDirectory;
 const irsServiceManagerAddress = avsDeploymentData.addresses.irsServiceManager;
 const ecdsaStakeRegistryAddress = avsDeploymentData.addresses.stakeRegistry;
-const variableLendingPoolAddress =
+export const variableLendingPoolAddress =
   avsDeploymentData.addresses.mockVariableLendingPool;
-const fixedLendingPoolAddress =
+export const fixedLendingPoolAddress =
   avsDeploymentData.addresses.mockFixedLendingPool;
 
 const delegationManagerABI = JSON.parse(
@@ -49,28 +49,32 @@ const delegationManagerABI = JSON.parse(
     "utf8"
   )
 );
+
 const ecdsaRegistryABI = JSON.parse(
   fs.readFileSync(
     path.resolve(__dirname, "../abis/ECDSAStakeRegistry.json"),
     "utf8"
   )
 );
+
 const irsServiceManagerABI = JSON.parse(
   fs.readFileSync(
     path.resolve(__dirname, "../abis/IRSServiceManager.json"),
     "utf8"
   )
 );
+
 const avsDirectoryABI = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "../abis/IAVSDirectory.json"), "utf8")
 );
-const variableLendingPoolABI = JSON.parse(
+
+export const variableLendingPoolABI = JSON.parse(
   fs.readFileSync(
     path.resolve(__dirname, "../abis/MockVariableLendingPool.json"),
     "utf8"
   )
 );
-const fixedLendingPoolABI = JSON.parse(
+export const fixedLendingPoolABI = JSON.parse(
   fs.readFileSync(
     path.resolve(__dirname, "../abis/MockFixedRateLendingPool.json"),
     "utf8"
@@ -82,7 +86,7 @@ const delegationManager = new ethers.Contract(
   delegationManagerABI,
   wallet
 );
-const irsManager = new ethers.Contract(
+export const irsManager = new ethers.Contract(
   irsServiceManagerAddress,
   irsServiceManagerABI,
   wallet
@@ -97,12 +101,12 @@ const avsDirectory = new ethers.Contract(
   avsDirectoryABI,
   wallet
 );
-const variableLendingPool = new ethers.Contract(
+export const variableLendingPool = new ethers.Contract(
   variableLendingPoolAddress,
   variableLendingPoolABI,
   provider
 );
-const fixedLendingPool = new ethers.Contract(
+export const fixedLendingPool = new ethers.Contract(
   fixedLendingPoolAddress,
   fixedLendingPoolABI,
   provider
@@ -110,6 +114,18 @@ const fixedLendingPool = new ethers.Contract(
 
 const registerOperator = async () => {
   try {
+    // TODO: Check if operator is already registered
+    try {
+      const isAlreadyRegistered = await delegationManager.isOperator(
+        wallet.address
+      );
+      if (isAlreadyRegistered) {
+        console.log("Operator already registered");
+        return;
+      }
+    } catch (error) {
+      console.log(error);
+    }
     const tx1 = await delegationManager.registerAsOperator(
       {
         __deprecated_earningsReceiver: wallet.address,
@@ -196,41 +212,76 @@ const findMatchingSwap = async (request: any): Promise<number | null> => {
 };
 
 const handleSwapValidation = async (task: any, taskIndex: number) => {
+  console.log("\n=== Processing Swap Validation Task ===");
   const swapRequest = decodeSwapRequest(task.payload);
-  console.log("Processing swap validation", swapRequest);
+  console.log("\nSwap Request Details:", {
+    user: swapRequest.user,
+    notionalAmount: ethers.formatEther(swapRequest.notionalAmount) + " ETH",
+    fixedRate: (Number(swapRequest.fixedRate) / 100).toString() + "%",
+    direction: swapRequest.isPayingFixed
+      ? "Variable → Fixed"
+      : "Fixed → Variable",
+    duration: Number(swapRequest.duration) / (24 * 60 * 60) + " days",
+  });
 
+  console.log("\nVerifying loan position...");
+  const pool = swapRequest.isPayingFixed
+    ? variableLendingPool
+    : fixedLendingPool;
   const hasValidLoan = await verifyLoanPosition(
     swapRequest.user,
-    swapRequest.isPayingFixed ? variableLendingPool : fixedLendingPool,
+    pool,
     swapRequest.notionalAmount
   );
 
   if (!hasValidLoan) {
-    console.warn("Invalid loan position", { user: swapRequest.user });
+    console.log("❌ Invalid loan position:", {
+      user: swapRequest.user,
+      pool: swapRequest.isPayingFixed ? "Variable Pool" : "Fixed Pool",
+    });
     return;
   }
+  console.log("✅ Loan position verified successfully", {
+    user: swapRequest.user,
+    pool: swapRequest.isPayingFixed ? "Variable Pool" : "Fixed Pool",
+  });
 
+  console.log("\nSearching for matching swap...");
   const matchingSwapId = await findMatchingSwap(swapRequest);
+  if (matchingSwapId !== null) {
+    console.log("✅ Found matching swap:", { matchingSwapId });
+  } else {
+    console.log("ℹ️ No matching swap found, creating standalone swap");
+  }
 
+  console.log("\nSigning and submitting response...");
   await signAndRespondToTask(task, taskIndex, matchingSwapId);
 };
 
 const handleRateAndSettlement = async (task: any, taskIndex: number) => {
+  console.log("\n=== Processing Rate and Settlement Task ===");
   const { swapsToSettle, proposedRate } = decodeRateData(task.payload);
-  console.log("Processing rate and settlement", {
+  console.log("\nTask Details:", {
     swapsToSettle,
-    proposedRate,
+    proposedRate: (Number(proposedRate) / 1e27).toString() + "%",
   });
 
+  console.log("\nValidating proposed rate...");
   const currentRate = await getCurrentRate();
   const isValidRate =
     Math.abs(Number(proposedRate) - Number(currentRate)) <= MAX_RATE_DEVIATION;
 
   if (!isValidRate) {
-    console.warn("Invalid rate proposed", { proposedRate, currentRate });
+    console.log("❌ Invalid rate proposed:", {
+      proposedRate: (Number(proposedRate) / 1e27).toString() + "%",
+      currentRate: (Number(currentRate) / 1e27).toString() + "%",
+      maxDeviation: (MAX_RATE_DEVIATION / 100).toString() + "%",
+    });
     return;
   }
+  console.log("✅ Rate validated successfully");
 
+  console.log("\nSigning and submitting response...");
   await signAndRespondToTask(task, taskIndex);
 };
 
@@ -239,13 +290,25 @@ const signAndRespondToTask = async (
   taskIndex: number,
   matchingSwapId?: number | null
 ) => {
+  console.log("\n--- Signing Task Response ---");
+
   let messageData;
   if (task.taskType === TaskType.SWAP_VALIDATION) {
     messageData = [...decodeSwapRequest(task.payload), matchingSwapId || 0];
+    console.log("Swap validation response data:", {
+      taskIndex,
+      matchingSwapId: matchingSwapId || "None",
+    });
   } else {
     messageData = [...decodeRateData(task.payload)];
+    console.log("Rate validation response data:", {
+      taskIndex,
+      swapsToSettle: messageData[0],
+      rate: (Number(messageData[1]) / 1e27).toString() + "%",
+    });
   }
 
+  console.log("\nGenerating signature...");
   const messageHash = ethers.solidityPackedKeccak256(
     ["uint32", "uint8", "bytes"],
     [task.taskCreatedBlock, task.taskType, task.payload]
@@ -253,42 +316,41 @@ const signAndRespondToTask = async (
   const messageBytes = ethers.getBytes(messageHash);
   const signature = await wallet.signMessage(messageBytes);
 
-  const operators = [await wallet.getAddress()];
-  const signatures = [signature];
-  const signedTask = ethers.AbiCoder.defaultAbiCoder().encode(
-    ["address[]", "bytes[]", "uint32"],
-    [
-      operators,
-      signatures,
-      ethers.toBigInt((await provider.getBlockNumber()) - 1),
-    ]
-  );
-
-  const tx = await irsManager.respondToTask(task, taskIndex, signedTask);
-  await tx.wait();
-  console.log("Responded to task", taskIndex);
+  console.log("\nSubmitting response to contract...");
+  const tx = await irsManager.respondToTask(task, taskIndex, signature);
+  console.log("Transaction hash:", tx.hash);
+  const receipt = await tx.wait();
+  console.log("✅ Response submitted successfully");
+  console.log("Gas used:", receipt.gasUsed.toString());
 };
 
 const checkForSettlements = async () => {
   try {
+    console.log("\n=== Checking for Due Settlements ===");
     const dueSwaps = await findDueSettlements();
+    console.log("Due swaps found:", dueSwaps.length);
+
     if (dueSwaps.length === 0) return;
 
+    console.log("\nDue Swaps:", dueSwaps);
     const currentRate = await getCurrentRate();
-    const taskData = ethers.AbiCoder.defaultAbiCoder().encode(
-      ["uint8", "tuple(uint256[],uint256)"],
-      [TaskType.RATE_AND_SETTLEMENT, [dueSwaps, currentRate]]
+    console.log(
+      "Current variable rate:",
+      (Number(currentRate) / 1e27).toString() + "%"
     );
 
+    console.log("\nCreating settlement task...");
     const tx = await irsManager.createNewTask(
-      taskData,
-      66, // quorumThresholdPercentage
-      "0x" // quorumNumbers - empty for ECDSA
+      [TaskType.RATE_AND_SETTLEMENT, [dueSwaps, currentRate]],
+      66,
+      "0x"
     );
-    await tx.wait();
-    console.log("Created settlement task");
+    console.log("Transaction hash:", tx.hash);
+    const receipt = await tx.wait();
+    console.log("✅ Settlement task created successfully");
+    console.log("Gas used:", receipt.gasUsed.toString());
   } catch (error) {
-    console.error("Error checking settlements:", error);
+    console.error("❌ Error checking settlements:", error);
   }
 };
 

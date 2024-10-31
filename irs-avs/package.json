@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "start:operator": "ts-node operator/irsOperator.ts",
-    "start:traffic": "ts-node operator/createNewTasks.ts",
+    "start:swap": "ts-node operator/createNewTasks.ts",
+    "start:lend": "ts-node operator/lend.ts",
     "start:anvil": "anvil",
     "deploy:core": "cd contracts && forge script script/DeployEigenLayerCore.s.sol --rpc-url http://localhost:8545 --broadcast",
     "deploy:irs-avs": "cd contracts && forge script script/IRSDeployer.s.sol --rpc-url http://localhost:8545 --broadcast",

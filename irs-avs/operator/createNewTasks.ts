@@ -1,54 +1,140 @@
 import { ethers } from "ethers";
+import { TaskType } from "./irsOperator";
 import * as dotenv from "dotenv";
-const fs = require('fs');
-const path = require('path');
+const fs = require("fs");
+const path = require("path");
 dotenv.config();
 
-// Setup env variables
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
-const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
-/// TODO: Hack
-let chainId = 31337;
+const wallet1 = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
+const wallet2 = new ethers.Wallet(process.env.PRIVATE_KEY_2!, provider);
+const chainId = 31337;
 
-const avsDeploymentData = JSON.parse(fs.readFileSync(path.resolve(__dirname, `../contracts/deployments/hello-world/${chainId}.json`), 'utf8'));
-const helloWorldServiceManagerAddress = avsDeploymentData.addresses.helloWorldServiceManager;
-const helloWorldServiceManagerABI = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../abis/HelloWorldServiceManager.json'), 'utf8'));
-// Initialize contract objects from ABIs
-const helloWorldServiceManager = new ethers.Contract(helloWorldServiceManagerAddress, helloWorldServiceManagerABI, wallet);
+const avsDeploymentData = JSON.parse(
+  fs.readFileSync(
+    path.resolve(__dirname, `../contracts/deployments/irs-avs/${chainId}.json`),
+    "utf8"
+  )
+);
 
+const irsServiceManagerAddress = avsDeploymentData.addresses.irsServiceManager;
 
-// Function to generate random names
-function generateRandomName(): string {
-    const adjectives = ['Quick', 'Lazy', 'Sleepy', 'Noisy', 'Hungry'];
-    const nouns = ['Fox', 'Dog', 'Cat', 'Mouse', 'Bear'];
-    const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
-    const noun = nouns[Math.floor(Math.random() * nouns.length)];
-    const randomName = `${adjective}${noun}${Math.floor(Math.random() * 1000)}`;
-    return randomName;
-  }
+const irsServiceManagerABI = JSON.parse(
+  fs.readFileSync(
+    path.resolve(__dirname, "../abis/IRSServiceManager.json"),
+    "utf8"
+  )
+);
 
-async function createNewTask(taskName: string) {
+const irsManager1 = new ethers.Contract(
+  irsServiceManagerAddress,
+  irsServiceManagerABI,
+  wallet1
+);
+
+const irsManager2 = new ethers.Contract(
+  irsServiceManagerAddress,
+  irsServiceManagerABI,
+  wallet2
+);
+
+const createSwap = async () => {
   try {
-    // Send a transaction to the createNewTask function
-    const tx = await helloWorldServiceManager.createNewTask(taskName);
-    
-    // Wait for the transaction to be mined
-    const receipt = await tx.wait();
-    
-    console.log(`Transaction successful with hash: ${receipt.hash}`);
+    console.log("\n--- Creating Opposite Swap Requests ---");
+
+    const notionalAmount = ethers.parseEther("10");
+    const fixedRate = 600; // 6.00%
+    const duration = 365 * 24 * 60 * 60; // 1 year
+    const margin = ethers.parseEther("1");
+
+    console.log("\nCreating Variable->Fixed Swap Request");
+    console.log("From address:", wallet1.address);
+
+    console.log("\nWallet1 Swap Parameters:", {
+      notionalAmount: ethers.formatEther(notionalAmount),
+      fixedRate: fixedRate / 100 + "%",
+      duration: duration / (24 * 60 * 60) + " days",
+      isPayingFixed: true,
+      margin: ethers.formatEther(margin),
+    });
+
+    const swapData1 = ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint8", "address", "uint256", "uint256", "bool", "uint256", "uint256"],
+      [
+        TaskType.SWAP_VALIDATION,
+        wallet1.address,
+        notionalAmount,
+        fixedRate,
+        true, // wants to pay fixed
+        duration,
+        margin,
+      ]
+    );
+
+    console.log(fixedRate, duration, margin);
+
+    let tx = await irsManager1.createNewTask(
+      TaskType.SWAP_VALIDATION,
+      swapData1,
+      {
+        value: margin,
+      }
+    );
+    await tx.wait();
+    console.log("Wallet1 swap request submitted");
+
+    // Wait before creating opposite swap
+    console.log("\nWaiting before creating opposite swap...");
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+
+    // Fixed Rate User (Wallet2) creates opposite swap
+    console.log("\nCreating Fixed->Variable Swap Request");
+    console.log("From address:", wallet2.address);
+
+    console.log("\nWallet2 Swap Parameters:", {
+      notionalAmount: ethers.formatEther(notionalAmount),
+      fixedRate: fixedRate / 100 + "%",
+      duration: duration / (24 * 60 * 60) + " days",
+      isPayingFixed: false,
+      margin: ethers.formatEther(margin),
+    });
+
+    const swapData2 = ethers.AbiCoder.defaultAbiCoder().encode(
+      ["uint8", "address", "uint256", "uint256", "bool", "uint256", "uint256"],
+      [
+        TaskType.SWAP_VALIDATION,
+        wallet2.address,
+        notionalAmount,
+        fixedRate,
+        false, // wants to pay variable
+        duration,
+        margin,
+      ]
+    );
+
+    tx = await irsManager2.createNewTask(
+      swapData2,
+      66,
+      "0x0000000000000000000000000000000000000000",
+      {
+        value: margin,
+      }
+    );
+    await tx.wait();
+    console.log("Wallet2 swap request submitted");
+
+    console.log("\nBoth swap requests created successfully!");
+    console.log("\nWaiting for operator to validate and match swaps...");
+    console.log(
+      "(You can check contract events for SwapCreated and SwapsMatched events)"
+    );
   } catch (error) {
-    console.error('Error sending transaction:', error);
+    console.error("Failed to create swaps:", error);
+    throw error;
   }
-}
+};
 
-// Function to create a new task with a random name every 15 seconds
-function startCreatingTasks() {
-  setInterval(() => {
-    const randomName = generateRandomName();
-    console.log(`Creating new task with name: ${randomName}`);
-    createNewTask(randomName);
-  }, 5000);
-}
-
-// Start the process
-startCreatingTasks();
+createSwap().catch((error) => {
+  console.error("Fatal error:", error);
+  process.exit(1);
+});
