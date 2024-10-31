@@ -5558,7 +5558,8 @@ contract IRSServiceManager is
 
     enum TaskType {
         SWAP_VALIDATION,
-        RATE_AND_SETTLEMENT
+        MATCH_VALIDATION,
+        SETTLEMENT
     }
 
     struct Task {
@@ -5570,7 +5571,7 @@ contract IRSServiceManager is
     struct Swap {
         address owner;
         uint256 notionalAmount;
-        uint256 fixedRate; // In basis points (1% = 100)
+        uint256 fixedRate;
         bool isPayingFixed;
         uint256 margin;
         uint256 startTime;
@@ -5588,7 +5589,8 @@ contract IRSServiceManager is
 
     uint256 public constant INITIAL_MARGIN_PERCENTAGE = 10_00; // 10%
     uint256 public constant BASIS_POINTS_DIVISOR = 10000;
-    uint256 public constant SETTLEMENT_PERIOD = 30 days;
+    uint256 public constant SETTLEMENT_PERIOD = 3 minutes; //only for testing purposes
+    uint256 public constant SETTLEMENT_REWARD_PERCENTAGE = 10; // 0.1%
 
     uint32 public latestTaskNum;
     mapping(uint32 => bytes32) public allTaskHashes;
@@ -5598,6 +5600,20 @@ contract IRSServiceManager is
 
     event NewTaskCreated(uint32 indexed taskIndex, Task task);
     event TaskResponded(uint32 indexed taskIndex, Task task, address operator);
+    event SwapsMatched(
+        uint256 indexed swap1Id,
+        uint256 indexed swap2Id,
+        address indexed matcher
+    );
+    event SwapSettled(
+        uint256 indexed swapId,
+        uint256 variableRate,
+        uint256 payment,
+        address indexed payer,
+        address indexed receiver,
+        address settler,
+        uint256 reward
+    );
 
     event SwapCreated(
         uint256 indexed swapId,
@@ -5662,10 +5678,10 @@ contract IRSServiceManager is
                 payload,
                 (address, uint256, uint256, bool, uint256, uint256)
             );
-
+            require(user == msg.sender, "Only owner can create swap");
             uint256 requiredMargin = (notionalAmount *
                 INITIAL_MARGIN_PERCENTAGE) / BASIS_POINTS_DIVISOR;
-            if (msg.value < requiredMargin) revert InsufficientMargin();
+            require(msg.value >= requiredMargin, "Insufficient margin");
         }
 
         Task memory newTask = Task({
@@ -5675,7 +5691,6 @@ contract IRSServiceManager is
         });
 
         allTaskHashes[latestTaskNum] = keccak256(abi.encode(newTask));
-
         emit NewTaskCreated(latestTaskNum++, newTask);
     }
 
@@ -5683,12 +5698,11 @@ contract IRSServiceManager is
         Task calldata task,
         uint32 referenceTaskIndex,
         bytes calldata signature
-    ) external onlyOperator {
+    ) external {
         require(
             keccak256(abi.encode(task)) == allTaskHashes[referenceTaskIndex],
             "Invalid task"
         );
-
         bytes32 messageHash = keccak256(
             abi.encodePacked(
                 task.taskCreatedBlock,
@@ -5697,38 +5711,39 @@ contract IRSServiceManager is
             )
         );
         bytes32 ethSignedMessageHash = messageHash.toEthSignedMessageHash();
+        address signer = ethSignedMessageHash.recover(signature);
         require(
-            ethSignedMessageHash.recover(signature) == msg.sender,
-            "Invalid signature"
+            ECDSAStakeRegistry(stakeRegistry).operatorRegistered(signer),
+            "Invalid operator"
         );
 
         allTaskResponses[msg.sender][referenceTaskIndex] = signature;
 
         if (task.taskType == TaskType.SWAP_VALIDATION) {
-            processSwapValidation(task.payload);
-        } else {
-            processRateAndSettlement(task.payload);
+            processValidatedSwap(task.payload);
+        } else if (task.taskType == TaskType.MATCH_VALIDATION) {
+            processValidatedMatch(task.payload);
+        } else if (task.taskType == TaskType.SETTLEMENT) {
+            processValidatedSettlement(task.payload);
         }
 
         emit TaskResponded(referenceTaskIndex, task, msg.sender);
     }
 
-    function processSwapValidation(bytes memory data) internal {
+    function processValidatedSwap(bytes memory payload) internal {
         (
             address owner,
             uint256 notionalAmount,
             uint256 fixedRate,
             bool isPayingFixed,
-            uint256 margin,
             uint256 duration,
-            uint256 matchedWithId
+            uint256 margin
         ) = abi.decode(
-                data,
-                (address, uint256, uint256, bool, uint256, uint256, uint256)
+                payload,
+                (address, uint256, uint256, bool, uint256, uint256)
             );
 
         uint256 swapId = nextSwapId++;
-
         swaps[swapId] = Swap({
             owner: owner,
             notionalAmount: notionalAmount,
@@ -5739,8 +5754,8 @@ contract IRSServiceManager is
             duration: duration,
             lastSettlement: block.timestamp,
             isActive: true,
-            matched: matchedWithId != 0,
-            matchedWith: matchedWithId
+            matched: false,
+            matchedWith: 0
         });
 
         emit SwapCreated(
@@ -5751,81 +5766,94 @@ contract IRSServiceManager is
             isPayingFixed,
             margin
         );
+    }
 
-        if (matchedWithId != 0) {
-            Swap storage matchedSwap = swaps[matchedWithId];
-            matchedSwap.matched = true;
-            matchedSwap.matchedWith = swapId;
+    function processValidatedMatch(bytes memory payload) internal {
+        (uint256 swap1Id, uint256 swap2Id, bool isValid, address matcher) = abi
+            .decode(payload, (uint256, uint256, bool, address));
 
-            emit SwapsMatched(swapId, matchedWithId);
+        require(isValid, "Match validation failed");
+
+        Swap storage swap1 = swaps[swap1Id];
+        Swap storage swap2 = swaps[swap2Id];
+
+        swap1.matched = true;
+        swap1.matchedWith = swap2Id;
+        swap2.matched = true;
+        swap2.matchedWith = swap1Id;
+
+        emit SwapsMatched(swap1Id, swap2Id, matcher);
+    }
+
+    function processValidatedSettlement(bytes memory payload) internal {
+        (
+            uint256[] memory swapIds,
+            uint256 variableRate,
+            bool[] memory validationResults,
+            address settler
+        ) = abi.decode(payload, (uint256[], uint256, bool[], address));
+
+        for (uint256 i = 0; i < swapIds.length; i++) {
+            if (validationResults[i]) {
+                _settleValidatedSwap(swapIds[i], variableRate, settler);
+            }
         }
     }
 
-    function processRateAndSettlement(bytes memory data) internal {
-        (uint256[] memory swapsToSettle, uint256 validatedRate) = abi.decode(
-            data,
-            (uint256[], uint256)
-        );
-
-        for (uint256 i = 0; i < swapsToSettle.length; i++) {
-            settleSwap(swapsToSettle[i], validatedRate);
-        }
-    }
-
-    function settleSwap(uint256 swapId, uint256 validatedRate) internal {
+    function _settleValidatedSwap(
+        uint256 swapId,
+        uint256 variableRate,
+        address settler
+    ) internal {
         Swap storage swap = swaps[swapId];
         require(swap.isActive && swap.matched, "Invalid swap");
-        require(
-            block.timestamp >= swap.lastSettlement + SETTLEMENT_PERIOD,
-            "Too early"
-        );
 
         Swap storage matchedSwap = swaps[swap.matchedWith];
-
         uint256 timePassed = block.timestamp - swap.lastSettlement;
+
         uint256 payment = calculatePayment(
             swap.notionalAmount,
-            validatedRate,
+            variableRate,
             swap.fixedRate,
             timePassed
         );
+
+        uint256 settlementReward = (payment * SETTLEMENT_REWARD_PERCENTAGE) /
+            BASIS_POINTS_DIVISOR;
 
         (
             address payer,
             address receiver,
             Swap storage payerSwap
-        ) = validatedRate > swap.fixedRate
+        ) = variableRate > swap.fixedRate
                 ? (swap.owner, matchedSwap.owner, swap)
                 : (matchedSwap.owner, swap.owner, matchedSwap);
 
-        if (payerSwap.margin < payment) revert InsufficientMargin();
-        payerSwap.margin -= payment;
+        require(
+            payerSwap.margin >= payment + settlementReward,
+            "Insufficient margin"
+        );
+        payerSwap.margin -= (payment + settlementReward);
 
-        (bool success, ) = payable(receiver).call{value: payment}("");
-        if (!success) revert PaymentFailed();
+        _safeTransferETH(receiver, payment);
+        _safeTransferETH(settler, settlementReward);
 
         if (block.timestamp >= swap.startTime + swap.duration) {
-            swap.isActive = false;
-            matchedSwap.isActive = false;
-
-            if (swap.margin > 0) {
-                (bool s1, ) = payable(swap.owner).call{value: swap.margin}("");
-                if (!s1) revert PaymentFailed();
-                swap.margin = 0;
-            }
-            if (matchedSwap.margin > 0) {
-                (bool s2, ) = payable(matchedSwap.owner).call{
-                    value: matchedSwap.margin
-                }("");
-                if (!s2) revert PaymentFailed();
-                matchedSwap.margin = 0;
-            }
+            _closeSwaps(swap, matchedSwap);
         } else {
             swap.lastSettlement = block.timestamp;
             matchedSwap.lastSettlement = block.timestamp;
         }
 
-        emit SwapSettled(swapId, validatedRate, payment, payer, receiver);
+        emit SwapSettled(
+            swapId,
+            variableRate,
+            payment,
+            payer,
+            receiver,
+            settler,
+            settlementReward
+        );
     }
 
     function calculatePayment(
@@ -5843,12 +5871,69 @@ contract IRSServiceManager is
             (365 days * BASIS_POINTS_DIVISOR);
     }
 
+    function _closeSwaps(Swap storage swap1, Swap storage swap2) internal {
+        swap1.isActive = false;
+        swap2.isActive = false;
+
+        if (swap1.margin > 0) {
+            uint256 margin = swap1.margin;
+            swap1.margin = 0;
+            _safeTransferETH(swap1.owner, margin);
+        }
+
+        if (swap2.margin > 0) {
+            uint256 margin = swap2.margin;
+            swap2.margin = 0;
+            _safeTransferETH(swap2.owner, margin);
+        }
+    }
+
+    function _safeTransferETH(address to, uint256 amount) internal {
+        (bool success, ) = to.call{value: amount}("");
+        require(success, "ETH transfer failed");
+    }
+
     function operatorHasMinimumWeight(
         address operator
     ) public view returns (bool) {
         return
             ECDSAStakeRegistry(stakeRegistry).getOperatorWeight(operator) >=
             ECDSAStakeRegistry(stakeRegistry).minimumWeight();
+    }
+
+    function getSwap(
+        uint256 swapId
+    )
+        external
+        view
+        returns (
+            address owner,
+            uint256 notionalAmount,
+            uint256 fixedRate,
+            bool isPayingFixed,
+            uint256 margin,
+            uint256 startTime,
+            uint256 duration,
+            uint256 lastSettlement,
+            bool isActive,
+            bool matched,
+            uint256 matchedWith
+        )
+    {
+        Swap storage swap = swaps[swapId];
+        return (
+            swap.owner,
+            swap.notionalAmount,
+            swap.fixedRate,
+            swap.isPayingFixed,
+            swap.margin,
+            swap.startTime,
+            swap.duration,
+            swap.lastSettlement,
+            swap.isActive,
+            swap.matched,
+            swap.matchedWith
+        );
     }
 
     receive() external payable {}

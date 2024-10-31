@@ -4,22 +4,17 @@ const fs = require("fs");
 const path = require("path");
 dotenv.config();
 
-if (!Object.keys(process.env).length) {
-  throw new Error("process.env object is empty");
-}
-
 export enum TaskType {
   SWAP_VALIDATION,
-  RATE_AND_SETTLEMENT,
+  MATCH_VALIDATION,
+  SETTLEMENT,
 }
-
-const SETTLEMENT_CHECK_INTERVAL = 24000; // ms
-const MIN_HEALTH_FACTOR = 150; // 150%
-const MAX_RATE_DEVIATION = 200; // 2%
 
 const provider = new ethers.JsonRpcProvider(process.env.RPC_URL);
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
-let chainId = 31337;
+const chainId = 31337;
+const MIN_HEALTH_FACTOR = 150; // 150%
+const MAX_RATE_DEVIATION = 200; // 2% (in basis points)
 
 export const avsDeploymentData = JSON.parse(
   fs.readFileSync(
@@ -112,20 +107,16 @@ export const fixedLendingPool = new ethers.Contract(
   provider
 );
 
-const registerOperator = async () => {
+async function registerOperator() {
   try {
-    // TODO: Check if operator is already registered
-    try {
-      const isAlreadyRegistered = await delegationManager.isOperator(
-        wallet.address
-      );
-      if (isAlreadyRegistered) {
-        console.log("Operator already registered");
-        return;
-      }
-    } catch (error) {
-      console.log(error);
+    const isAlreadyRegistered = await delegationManager.isOperator(
+      wallet.address
+    );
+    if (isAlreadyRegistered) {
+      console.log("Operator already registered");
+      return;
     }
+
     const tx1 = await delegationManager.registerAsOperator(
       {
         __deprecated_earningsReceiver: wallet.address,
@@ -136,49 +127,193 @@ const registerOperator = async () => {
     );
     await tx1.wait();
     console.log("Operator registered to Core EigenLayer contracts");
+
+    const salt = ethers.hexlify(ethers.randomBytes(32));
+    const expiry = Math.floor(Date.now() / 1000) + 3600;
+
+    const operatorDigestHash =
+      await avsDirectory.calculateOperatorAVSRegistrationDigestHash(
+        wallet.address,
+        await irsManager.getAddress(),
+        salt,
+        expiry
+      );
+
+    const operatorSigningKey = new ethers.SigningKey(process.env.PRIVATE_KEY!);
+    const operatorSignedDigestHash =
+      operatorSigningKey.sign(operatorDigestHash);
+    const operatorSignature = ethers.Signature.from(
+      operatorSignedDigestHash
+    ).serialized;
+
+    const tx2 = await ecdsaRegistryContract.registerOperatorWithSignature(
+      { signature: operatorSignature, salt, expiry },
+      wallet.address
+    );
+    await tx2.wait();
+    console.log("Operator registered on AVS successfully");
   } catch (error) {
     console.error("Error in registering as operator:", error);
   }
+}
 
-  // Generate signature for AVS registration
-  const salt = ethers.hexlify(ethers.randomBytes(32));
-  const expiry = Math.floor(Date.now() / 1000) + 3600;
+function startListening() {
+  irsManager.on("NewTaskCreated", async (taskIndex: number, task: any) => {
+    console.log("\nNew task received:", {
+      taskIndex,
+      type: TaskType[task.taskType],
+      blockNumber: task.taskCreatedBlock,
+    });
 
-  let operatorSignatureWithSaltAndExpiry = {
-    signature: "",
-    salt: salt,
-    expiry: expiry,
-  };
+    try {
+      if (task.taskType === TaskType.SWAP_VALIDATION) {
+        await handleSwapValidation(task, taskIndex);
+      } else if (task.taskType === TaskType.MATCH_VALIDATION) {
+        await handleMatchValidation(task, taskIndex);
+      } else if (task.taskType === TaskType.SETTLEMENT) {
+        await handleSettlement(task, taskIndex);
+      }
+    } catch (error) {
+      console.error("Error handling task:", error);
+    }
+  });
 
-  // Calculate and sign digest hash
-  const operatorDigestHash =
-    await avsDirectory.calculateOperatorAVSRegistrationDigestHash(
-      wallet.address,
-      await irsManager.getAddress(),
-      salt,
-      expiry
-    );
+  console.log("Listening for tasks...");
+}
 
-  const operatorSigningKey = new ethers.SigningKey(process.env.PRIVATE_KEY!);
-  const operatorSignedDigestHash = operatorSigningKey.sign(operatorDigestHash);
-  operatorSignatureWithSaltAndExpiry.signature = ethers.Signature.from(
-    operatorSignedDigestHash
-  ).serialized;
+async function handleSwapValidation(task: any, taskIndex: number) {
+  console.log("\n=== Processing Swap Validation Task ===");
+  const { user, notionalAmount, fixedRate, isPayingFixed, duration, margin } =
+    await decodeSwapRequest(task.payload);
 
-  // Register with AVS
-  const tx2 = await ecdsaRegistryContract.registerOperatorWithSignature(
-    operatorSignatureWithSaltAndExpiry,
-    wallet.address
+  console.log("Swap Request Details:", {
+    user,
+    notionalAmount: ethers.formatEther(notionalAmount),
+    fixedRate: (Number(fixedRate) / 100).toString() + "%",
+    isPayingFixed,
+    duration: Number(duration) / (24 * 60 * 60) + " days",
+    margin: ethers.formatEther(margin),
+  });
+
+  const pool = isPayingFixed ? variableLendingPool : fixedLendingPool;
+  const isValid = await verifyLoanPosition(user, pool, notionalAmount);
+
+  if (isValid) {
+    console.log("✅ Valid loan position");
+    await signAndRespondToTask(task, taskIndex);
+  } else {
+    console.log("❌ Invalid loan position");
+  }
+}
+
+async function handleMatchValidation(task: any, taskIndex: number) {
+  const { swap1Id, swap2Id, matcher } = await decodeMatchRequest(task.payload);
+  const swap1 = await irsManager.getSwap(swap1Id);
+  const swap2 = await irsManager.getSwap(swap2Id);
+  const isValid = await validateMatch(swap1, swap2);
+
+  const responsePayload = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["uint256", "uint256", "bool", "address"],
+    [swap1Id, swap2Id, isValid, matcher]
   );
-  await tx2.wait();
-  console.log("Operator registered on AVS successfully");
+
+  await signAndRespondToTask(task, taskIndex, responsePayload);
+}
+
+async function handleSettlement(task: any, taskIndex: number) {
+  const { swapsToSettle, settler } = await decodeSettlementRequest(
+    task.payload
+  );
+  const currentRate = await getCurrentRate();
+
+  const validationResults = await Promise.all(
+    swapsToSettle.map(async (swapId: number) => validateSettlement(swapId))
+  );
+
+  const responsePayload = ethers.AbiCoder.defaultAbiCoder().encode(
+    ["uint256[]", "uint256", "bool[]", "address"],
+    [swapsToSettle, currentRate, validationResults, settler]
+  );
+
+  await signAndRespondToTask(task, taskIndex, responsePayload);
+}
+
+async function signAndRespondToTask(
+  task: any,
+  taskIndex: number,
+  modifiedPayload?: string
+) {
+  const payload = modifiedPayload || task.payload;
+  const messageHash = ethers.solidityPackedKeccak256(
+    ["uint32", "uint8", "bytes"],
+    [task.taskCreatedBlock, task.taskType, payload]
+  );
+
+  const messageBytes = ethers.getBytes(messageHash);
+  const signature = await wallet.signMessage(messageBytes);
+
+  const tx = await irsManager.respondToTask(
+    {
+      taskCreatedBlock: task.taskCreatedBlock,
+      taskType: task.taskType,
+      payload,
+    },
+    taskIndex,
+    signature
+  );
+
+  console.log("Response submitted. Transaction hash:", tx.hash);
+  await tx.wait();
+}
+
+const getCurrentRate = async () => {
+  const [, rate] = await variableLendingPool.getReserveData();
+  return rate;
+};
+
+const decodeSwapRequest = async (payload: string) => {
+  const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
+    ["address", "uint256", "uint256", "bool", "uint256", "uint256"],
+    payload
+  );
+  return {
+    user: decoded[0],
+    notionalAmount: decoded[1],
+    fixedRate: decoded[2],
+    isPayingFixed: decoded[3],
+    duration: decoded[4],
+    margin: decoded[5],
+  };
+};
+
+const decodeMatchRequest = async (payload: string) => {
+  const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
+    ["uint256", "uint256", "address"],
+    payload
+  );
+  return {
+    swap1Id: decoded[0],
+    swap2Id: decoded[1],
+    matcher: decoded[2],
+  };
+};
+
+const decodeSettlementRequest = async (payload: string) => {
+  const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
+    ["uint256[]", "address"],
+    payload
+  );
+  return {
+    swapsToSettle: decoded[0],
+    settler: decoded[1],
+  };
 };
 
 const verifyLoanPosition = async (
   user: string,
   pool: ethers.Contract,
   amount: bigint
-): Promise<boolean> => {
+) => {
   try {
     const { totalDebt, healthFactor } = await pool.getUserAccountData(user);
     return totalDebt >= amount && healthFactor >= MIN_HEALTH_FACTOR;
@@ -188,250 +323,44 @@ const verifyLoanPosition = async (
   }
 };
 
-const findMatchingSwap = async (request: any): Promise<number | null> => {
-  try {
-    const nextSwapId = await irsManager.nextSwapId();
-
-    for (let i = 0; i < nextSwapId; i++) {
-      const swap = await irsManager.swaps(i);
-
-      if (
-        !swap.matched &&
-        swap.isActive &&
-        swap.isPayingFixed !== request.isPayingFixed &&
-        swap.notionalAmount === request.notionalAmount
-      ) {
-        return i;
-      }
-    }
-    return null;
-  } catch (error) {
-    console.error("Error finding matching swap:", error);
-    return null;
-  }
-};
-
-const handleSwapValidation = async (task: any, taskIndex: number) => {
-  console.log("\n=== Processing Swap Validation Task ===");
-  const swapRequest = decodeSwapRequest(task.payload);
-  console.log("\nSwap Request Details:", {
-    user: swapRequest.user,
-    notionalAmount: ethers.formatEther(swapRequest.notionalAmount) + " ETH",
-    fixedRate: (Number(swapRequest.fixedRate) / 100).toString() + "%",
-    direction: swapRequest.isPayingFixed
-      ? "Variable → Fixed"
-      : "Fixed → Variable",
-    duration: Number(swapRequest.duration) / (24 * 60 * 60) + " days",
-  });
-
-  console.log("\nVerifying loan position...");
-  const pool = swapRequest.isPayingFixed
-    ? variableLendingPool
-    : fixedLendingPool;
-  const hasValidLoan = await verifyLoanPosition(
-    swapRequest.user,
-    pool,
-    swapRequest.notionalAmount
+const validateMatch = async (swap1: any, swap2: any) => {
+  return (
+    !swap1.matched &&
+    !swap2.matched &&
+    swap1.isActive &&
+    swap2.isActive &&
+    swap1.notionalAmount === swap2.notionalAmount &&
+    swap1.fixedRate === swap2.fixedRate &&
+    swap1.isPayingFixed !== swap2.isPayingFixed
   );
-
-  if (!hasValidLoan) {
-    console.log("❌ Invalid loan position:", {
-      user: swapRequest.user,
-      pool: swapRequest.isPayingFixed ? "Variable Pool" : "Fixed Pool",
-    });
-    return;
-  }
-  console.log("✅ Loan position verified successfully", {
-    user: swapRequest.user,
-    pool: swapRequest.isPayingFixed ? "Variable Pool" : "Fixed Pool",
-  });
-
-  console.log("\nSearching for matching swap...");
-  const matchingSwapId = await findMatchingSwap(swapRequest);
-  if (matchingSwapId !== null) {
-    console.log("✅ Found matching swap:", { matchingSwapId });
-  } else {
-    console.log("ℹ️ No matching swap found, creating standalone swap");
-  }
-
-  console.log("\nSigning and submitting response...");
-  await signAndRespondToTask(task, taskIndex, matchingSwapId);
 };
 
-const handleRateAndSettlement = async (task: any, taskIndex: number) => {
-  console.log("\n=== Processing Rate and Settlement Task ===");
-  const { swapsToSettle, proposedRate } = decodeRateData(task.payload);
-  console.log("\nTask Details:", {
-    swapsToSettle,
-    proposedRate: (Number(proposedRate) / 1e27).toString() + "%",
-  });
-
-  console.log("\nValidating proposed rate...");
-  const currentRate = await getCurrentRate();
-  const isValidRate =
-    Math.abs(Number(proposedRate) - Number(currentRate)) <= MAX_RATE_DEVIATION;
-
-  if (!isValidRate) {
-    console.log("❌ Invalid rate proposed:", {
-      proposedRate: (Number(proposedRate) / 1e27).toString() + "%",
-      currentRate: (Number(currentRate) / 1e27).toString() + "%",
-      maxDeviation: (MAX_RATE_DEVIATION / 100).toString() + "%",
-    });
-    return;
-  }
-  console.log("✅ Rate validated successfully");
-
-  console.log("\nSigning and submitting response...");
-  await signAndRespondToTask(task, taskIndex);
-};
-
-const signAndRespondToTask = async (
-  task: any,
-  taskIndex: number,
-  matchingSwapId?: number | null
-) => {
-  console.log("\n--- Signing Task Response ---");
-
-  let messageData;
-  if (task.taskType === TaskType.SWAP_VALIDATION) {
-    messageData = [...decodeSwapRequest(task.payload), matchingSwapId || 0];
-    console.log("Swap validation response data:", {
-      taskIndex,
-      matchingSwapId: matchingSwapId || "None",
-    });
-  } else {
-    messageData = [...decodeRateData(task.payload)];
-    console.log("Rate validation response data:", {
-      taskIndex,
-      swapsToSettle: messageData[0],
-      rate: (Number(messageData[1]) / 1e27).toString() + "%",
-    });
-  }
-
-  console.log("\nGenerating signature...");
-  const messageHash = ethers.solidityPackedKeccak256(
-    ["uint32", "uint8", "bytes"],
-    [task.taskCreatedBlock, task.taskType, task.payload]
-  );
-  const messageBytes = ethers.getBytes(messageHash);
-  const signature = await wallet.signMessage(messageBytes);
-
-  console.log("\nSubmitting response to contract...");
-  const tx = await irsManager.respondToTask(task, taskIndex, signature);
-  console.log("Transaction hash:", tx.hash);
-  const receipt = await tx.wait();
-  console.log("✅ Response submitted successfully");
-  console.log("Gas used:", receipt.gasUsed.toString());
-};
-
-const checkForSettlements = async () => {
+const validateSettlement = async (swapId: number) => {
   try {
-    console.log("\n=== Checking for Due Settlements ===");
-    const dueSwaps = await findDueSettlements();
-    console.log("Due swaps found:", dueSwaps.length);
+    const canSettle = await irsManager.canBeSettled(swapId);
+    if (!canSettle) return false;
 
-    if (dueSwaps.length === 0) return;
-
-    console.log("\nDue Swaps:", dueSwaps);
+    const { swap, matchedSwap } = await irsManager.getMatchedSwaps(swapId);
     const currentRate = await getCurrentRate();
-    console.log(
-      "Current variable rate:",
-      (Number(currentRate) / 1e27).toString() + "%"
-    );
 
-    console.log("\nCreating settlement task...");
-    const tx = await irsManager.createNewTask(
-      [TaskType.RATE_AND_SETTLEMENT, [dueSwaps, currentRate]],
-      66,
-      "0x"
-    );
-    console.log("Transaction hash:", tx.hash);
-    const receipt = await tx.wait();
-    console.log("✅ Settlement task created successfully");
-    console.log("Gas used:", receipt.gasUsed.toString());
-  } catch (error) {
-    console.error("❌ Error checking settlements:", error);
-  }
-};
-
-const getCurrentRate = async (): Promise<bigint> => {
-  const [rate, ,] = await variableLendingPool.getReserveData();
-  return rate;
-};
-
-const findDueSettlements = async (): Promise<number[]> => {
-  const nextSwapId = await irsManager.nextSwapId();
-  const dueSwaps: number[] = [];
-
-  for (let i = 0; i < nextSwapId; i++) {
-    const swap = await irsManager.swaps(i);
-    if (
-      swap.isActive &&
-      swap.matched &&
-      BigInt(Date.now()) / BigInt(1000) >=
-        swap.lastSettlement + BigInt(SETTLEMENT_CHECK_INTERVAL)
-    ) {
-      dueSwaps.push(i);
+    const latestRate = await variableLendingPool.getReserveData();
+    if (Math.abs(currentRate - latestRate[1]) > MAX_RATE_DEVIATION) {
+      return false;
     }
-  }
-  return dueSwaps;
-};
 
-const decodeSwapRequest = (payload: string): any => {
-  const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
-    ["address", "uint256", "uint256", "bool", "uint256"],
-    payload
-  );
-  return {
-    user: decoded[0],
-    notionalAmount: decoded[1],
-    fixedRate: decoded[2],
-    isPayingFixed: decoded[3],
-    duration: decoded[4],
-  };
-};
-
-const decodeRateData = (payload: string): any => {
-  const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
-    ["uint256[]", "uint256"],
-    payload
-  );
-  return {
-    swapsToSettle: decoded[0],
-    proposedRate: decoded[1],
-  };
-};
-
-const main = async () => {
-  try {
-    await registerOperator();
-
-    await irsManager.on(
-      "NewTaskCreated",
-      async (taskIndex: number, task: any) => {
-        console.log("New task received", taskIndex, task);
-        try {
-          if (task.taskType === TaskType.SWAP_VALIDATION) {
-            await handleSwapValidation(task, taskIndex);
-          } else {
-            await handleRateAndSettlement(task, taskIndex);
-          }
-        } catch (error) {
-          console.error("Error handling task:", error);
-        }
-      }
-    );
-
-    setInterval(checkForSettlements, SETTLEMENT_CHECK_INTERVAL);
-
-    console.log("Operator started successfully");
+    return true;
   } catch (error) {
-    console.error("Error in main function:", error);
-    throw error;
+    console.error("Error validating settlement:", error);
+    return false;
   }
 };
 
-main().catch((error) => {
+async function startOperator() {
+  await registerOperator();
+  startListening();
+}
+
+startOperator().catch((error) => {
   console.error("Fatal error:", error);
   process.exit(1);
 });

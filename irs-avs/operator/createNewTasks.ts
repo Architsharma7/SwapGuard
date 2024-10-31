@@ -26,17 +26,17 @@ const irsServiceManagerABI = JSON.parse(
   )
 );
 
-const irsManager1 = new ethers.Contract(
-  irsServiceManagerAddress,
-  irsServiceManagerABI,
-  wallet1
-);
-
-const irsManager2 = new ethers.Contract(
+const irsManager = new ethers.Contract(
   irsServiceManagerAddress,
   irsServiceManagerABI,
   wallet2
 );
+
+// const irsManager2 = new ethers.Contract(
+//   irsServiceManagerAddress,
+//   irsServiceManagerABI,
+//   wallet2
+// );
 
 const createSwap = async () => {
   try {
@@ -47,40 +47,40 @@ const createSwap = async () => {
     const duration = 365 * 24 * 60 * 60; // 1 year
     const margin = ethers.parseEther("1");
 
-    console.log("\nCreating Variable->Fixed Swap Request");
-    console.log("From address:", wallet1.address);
+    // console.log("\nCreating Variable->Fixed Swap Request");
+    // console.log("From address:", wallet1.address);
 
-    console.log("\nWallet1 Swap Parameters:", {
-      notionalAmount: ethers.formatEther(notionalAmount),
-      fixedRate: fixedRate / 100 + "%",
-      duration: duration / (24 * 60 * 60) + " days",
-      isPayingFixed: true,
-      margin: ethers.formatEther(margin),
-    });
+    // console.log("\nWallet1 Swap Parameters:", {
+    //   notionalAmount: ethers.formatEther(notionalAmount),
+    //   fixedRate: fixedRate / 100 + "%",
+    //   duration: duration / (24 * 60 * 60) + " days",
+    //   isPayingFixed: true,
+    //   margin: ethers.formatEther(margin),
+    // });
 
-    const swapData1 = ethers.AbiCoder.defaultAbiCoder().encode(
-      ["address", "uint256", "uint256", "bool", "uint256", "uint256"],
-      [
-        wallet1.address,
-        notionalAmount,
-        fixedRate,
-        true, // wants to pay fixed
-        duration,
-        margin,
-      ]
-    );
+    // const swapData1 = ethers.AbiCoder.defaultAbiCoder().encode(
+    //   ["address", "uint256", "uint256", "bool", "uint256", "uint256"],
+    //   [
+    //     wallet1.address,
+    //     notionalAmount,
+    //     fixedRate,
+    //     true, // wants to pay fixed
+    //     duration,
+    //     margin,
+    //   ]
+    // );
 
-    let tx = await irsManager1.createNewTask(
-      TaskType.SWAP_VALIDATION,
-      swapData1,
-      { value: margin }
-    );
-    await tx.wait();
-    console.log("Wallet1 swap request submitted");
+    // let tx = await irsManager.createNewTask(
+    //   TaskType.SWAP_VALIDATION,
+    //   swapData1,
+    //   { value: margin }
+    // );
+    // await tx.wait();
+    // console.log("Wallet1 swap request submitted");
 
     // Wait before creating opposite swap
-    console.log("\nWaiting before creating opposite swap...");
-    await new Promise((resolve) => setTimeout(resolve, 4000));
+    // console.log("\nWaiting before creating opposite swap...");
+    // await new Promise((resolve) => setTimeout(resolve, 4000));
 
     // Fixed Rate User (Wallet2) creates opposite swap
     console.log("\nCreating Fixed->Variable Swap Request");
@@ -106,17 +106,21 @@ const createSwap = async () => {
       ]
     );
 
-    tx = await irsManager2.createNewTask(TaskType.SWAP_VALIDATION, swapData2, {
-      value: margin,
-    });
+    let tx = await irsManager.createNewTask(
+      TaskType.SWAP_VALIDATION,
+      swapData2,
+      {
+        value: margin,
+      }
+    );
     await tx.wait();
     console.log("Wallet2 swap request submitted");
 
-    console.log("\nBoth swap requests created successfully!");
-    console.log("\nWaiting for operator to validate and match swaps...");
-    console.log(
-      "(You can check contract events for SwapCreated and SwapsMatched events)"
-    );
+    // console.log("\nBoth swap requests created successfully!");
+    // console.log("\nWaiting for operator to validate and match swaps...");
+    // console.log(
+    //   "(You can check contract events for SwapCreated and SwapsMatched events)"
+    // );
   } catch (error) {
     console.error("Failed to create swaps:", error);
     throw error;
