@@ -39,7 +39,7 @@ contract MockVariableLendingPool is Pausable, Ownable {
     event Withdraw(address indexed user, uint256 amount);
     event ReserveDataUpdated(uint256 liquidityRate, uint256 variableBorrowRate);
 
-    constructor(address initialOwner) Ownable(initialOwner) {
+    constructor(address initialOwner) Ownable() {
         reserveData.currentVariableBorrowRate = 0.05e27; // 5% APY
         reserveData.lastUpdateTimestamp = block.timestamp;
     }

@@ -7,3 +7,6 @@
 [submodule "irs-avs/contracts/lib/openzeppelin-contracts-upgradeable"]
 	path = irs-avs/contracts/lib/openzeppelin-contracts-upgradeable
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts-upgradeable
+[submodule "irs-avs/contracts/lib/openzeppelin-contracts"]
+	path = irs-avs/contracts/lib/openzeppelin-contracts
+	url = https://github.com/OpenZeppelin/openzeppelin-contracts

@@ -2,7 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {Script} from "forge-std/Script.sol";
-import {HelloWorldDeploymentLib} from "./utils/HelloWorldDeploymentLib.sol";
+import {IRSDeploymentLib} from "./utils/IRSDeploymentLib.sol";
 import {CoreDeploymentLib} from "./utils/CoreDeploymentLib.sol";
 import {SetupPaymentsLib} from "./utils/SetupPaymentsLib.sol";
 import {IRewardsCoordinator} from "@eigenlayer/contracts/interfaces/IRewardsCoordinator.sol";
@@ -32,32 +32,57 @@ contract SetupPayments is Script {
         deployer = vm.rememberKey(vm.envUint("PRIVATE_KEY"));
         vm.label(deployer, "Deployer");
 
-        coreDeployment = CoreDeploymentLib.readDeploymentJson("deployments/core/", block.chainid);
-        helloWorldDeployment = HelloWorldDeploymentLib.readDeploymentJson("deployments/hello-world/", block.chainid);
+        coreDeployment = CoreDeploymentLib.readDeploymentJson(
+            "deployments/core/",
+            block.chainid
+        );
+        helloWorldDeployment = HelloWorldDeploymentLib.readDeploymentJson(
+            "deployments/hello-world/",
+            block.chainid
+        );
 
         // TODO: Get the filePath from config
     }
 
     function run() external {
         vm.startBroadcast(deployer);
-        IRewardsCoordinator(coreDeployment.rewardsCoordinator).setRewardsUpdater(deployer);
-        PaymentInfo memory info = abi.decode(vm.parseJson(vm.readFile(filePath)), (PaymentInfo));
+        IRewardsCoordinator(coreDeployment.rewardsCoordinator)
+            .setRewardsUpdater(deployer);
+        PaymentInfo memory info = abi.decode(
+            vm.parseJson(vm.readFile(filePath)),
+            (PaymentInfo)
+        );
 
-        createAVSRewardsSubmissions(info.numPayments, info.amountPerPayment, info.duration, info.startTimestamp);
-        submitPaymentRoot(info.earners, info.endTimestamp, uint32(info.numPayments), uint32(info.amountPerPayment));
+        createAVSRewardsSubmissions(
+            info.numPayments,
+            info.amountPerPayment,
+            info.duration,
+            info.startTimestamp
+        );
+        submitPaymentRoot(
+            info.earners,
+            info.endTimestamp,
+            uint32(info.numPayments),
+            uint32(info.amountPerPayment)
+        );
 
-        IRewardsCoordinator.EarnerTreeMerkleLeaf memory earnerLeaf = IRewardsCoordinator.EarnerTreeMerkleLeaf({
-            earner: info.earners[info.indexToProve],
-            earnerTokenRoot: info.earnerTokenRoots[info.indexToProve]
-        });
+        IRewardsCoordinator.EarnerTreeMerkleLeaf
+            memory earnerLeaf = IRewardsCoordinator.EarnerTreeMerkleLeaf({
+                earner: info.earners[info.indexToProve],
+                earnerTokenRoot: info.earnerTokenRoots[info.indexToProve]
+            });
 
         processClaim(filePath, info.indexToProve, info.recipient, earnerLeaf);
 
         vm.stopBroadcast();
     }
 
-
-    function createAVSRewardsSubmissions(uint256 numPayments, uint256 amountPerPayment, uint32 duration, uint32 startTimestamp) public {
+    function createAVSRewardsSubmissions(
+        uint256 numPayments,
+        uint256 amountPerPayment,
+        uint32 duration,
+        uint32 startTimestamp
+    ) public {
         SetupPaymentsLib.createAVSRewardsSubmissions(
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
             helloWorldDeployment.strategy,
@@ -68,7 +93,12 @@ contract SetupPayments is Script {
         );
     }
 
-    function processClaim(string memory filePath, uint256 indexToProve, address recipient, IRewardsCoordinator.EarnerTreeMerkleLeaf memory earnerLeaf) public {
+    function processClaim(
+        string memory filePath,
+        uint256 indexToProve,
+        address recipient,
+        IRewardsCoordinator.EarnerTreeMerkleLeaf memory earnerLeaf
+    ) public {
         SetupPaymentsLib.processClaim(
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
             filePath,
@@ -80,14 +110,23 @@ contract SetupPayments is Script {
         );
     }
 
-    function submitPaymentRoot(address[] memory earners, uint32 endTimestamp, uint32 numPayments, uint32 amountPerPayment) public {
+    function submitPaymentRoot(
+        address[] memory earners,
+        uint32 endTimestamp,
+        uint32 numPayments,
+        uint32 amountPerPayment
+    ) public {
         bytes32[] memory tokenLeaves = SetupPaymentsLib.createTokenLeaves(
-            IRewardsCoordinator(coreDeployment.rewardsCoordinator), 
-            NUM_TOKEN_EARNINGS, 
-            amountPerPayment, 
+            IRewardsCoordinator(coreDeployment.rewardsCoordinator),
+            NUM_TOKEN_EARNINGS,
+            amountPerPayment,
             helloWorldDeployment.strategy
         );
-        IRewardsCoordinator.EarnerTreeMerkleLeaf[] memory earnerLeaves = SetupPaymentsLib.createEarnerLeaves(earners, tokenLeaves);
+        IRewardsCoordinator.EarnerTreeMerkleLeaf[]
+            memory earnerLeaves = SetupPaymentsLib.createEarnerLeaves(
+                earners,
+                tokenLeaves
+            );
 
         SetupPaymentsLib.submitRoot(
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
@@ -95,7 +134,7 @@ contract SetupPayments is Script {
             earnerLeaves,
             helloWorldDeployment.strategy,
             endTimestamp,
-            numPayments, 
+            numPayments,
             NUM_TOKEN_EARNINGS,
             filePath
         );

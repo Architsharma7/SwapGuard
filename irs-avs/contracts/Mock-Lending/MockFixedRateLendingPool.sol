@@ -38,7 +38,7 @@ contract MockFixedRateLendingPool is Pausable, Ownable {
     event CollateralWithdrawn(address indexed user, uint256 amount);
     event CollateralDeposited(address indexed user, uint256 amount);
 
-    constructor(address initialOwner) Ownable(initialOwner) {
+    constructor(address initialOwner) Ownable() {
         currentFixedRate = BASE_FIXED_RATE;
     }
 
