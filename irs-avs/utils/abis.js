@@ -6,10 +6,18 @@ const contractsDir = "contracts";
 const artifactsDir = path.join(contractsDir, "out");
 
 const contractsToExtract = [
-  "IAVSDirectory",
-  "IDelegationManager",
-  "ECDSAStakeRegistry",
-  "IRSServiceManagerECDSA",
+  { name: "IAVSDirectory", path: "IAVSDirectory.sol" },
+  { name: "IDelegationManager", path: "IDelegationManager.sol" },
+  { name: "ECDSAStakeRegistry", path: "ECDSAStakeRegistry.sol" },
+  { name: "IRSServiceManager", path: "IRSServiceManagerECDSA.sol" },
+  {
+    name: "MockVariableLendingPool",
+    path: "MockVariableLendingPool.sol",
+  },
+  {
+    name: "MockFixedRateLendingPool",
+    path: "MockFixedRateLendingPool.sol",
+  },
 ];
 
 if (!fs.existsSync(abiDir)) {
@@ -33,28 +41,28 @@ function checkArtifactsDirectory() {
   }
 }
 
-function extractAbi(contractName) {
+function extractAbi(contract) {
   const outputPath = path.join(
     artifactsDir,
-    `${contractName}.sol`,
-    `${contractName}.json`
+    contract.path,
+    `${contract.name}.json`
   );
-  const abiOutputPath = path.join(abiDir, `${contractName}.json`);
+  const abiOutputPath = path.join(abiDir, `${contract.name}.json`);
 
   try {
     const contractData = JSON.parse(fs.readFileSync(outputPath, "utf8"));
     const abi = JSON.stringify(contractData.abi, null, 2);
     fs.writeFileSync(abiOutputPath, abi);
-    console.log(`Extracted ABI for ${contractName}`);
+    console.log(`Extracted ABI for ${contract.name}`);
   } catch (error) {
-    console.error(`Error extracting ABI for ${contractName}:`, error.message);
+    console.error(`Error extracting ABI for ${contract.name}:`, error.message);
   }
 }
 
 checkArtifactsDirectory();
 
-for (const contractName of contractsToExtract) {
-  extractAbi(contractName);
+for (const contract of contractsToExtract) {
+  extractAbi(contract);
 }
 
 console.log(

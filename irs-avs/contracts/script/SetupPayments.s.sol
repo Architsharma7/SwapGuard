@@ -22,7 +22,7 @@ contract SetupPayments is Script {
 
     address private deployer;
     CoreDeploymentLib.DeploymentData coreDeployment;
-    HelloWorldDeploymentLib.DeploymentData helloWorldDeployment;
+    IRSDeploymentLib.DeploymentData IRSDeployment;
     string internal constant filePath = "test/mockData/scratch/payments.json";
 
     uint256 constant NUM_TOKEN_EARNINGS = 1;
@@ -36,8 +36,8 @@ contract SetupPayments is Script {
             "deployments/core/",
             block.chainid
         );
-        helloWorldDeployment = HelloWorldDeploymentLib.readDeploymentJson(
-            "deployments/hello-world/",
+        IRSDeployment = IRSDeploymentLib.readDeploymentJson(
+            "deployments/irs-avs/",
             block.chainid
         );
 
@@ -85,7 +85,7 @@ contract SetupPayments is Script {
     ) public {
         SetupPaymentsLib.createAVSRewardsSubmissions(
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
-            helloWorldDeployment.strategy,
+            IRSDeployment.strategy,
             numPayments,
             amountPerPayment,
             duration,
@@ -106,7 +106,7 @@ contract SetupPayments is Script {
             recipient,
             earnerLeaf,
             NUM_TOKEN_EARNINGS,
-            helloWorldDeployment.strategy
+            IRSDeployment.strategy
         );
     }
 
@@ -120,7 +120,7 @@ contract SetupPayments is Script {
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
             NUM_TOKEN_EARNINGS,
             amountPerPayment,
-            helloWorldDeployment.strategy
+            IRSDeployment.strategy
         );
         IRewardsCoordinator.EarnerTreeMerkleLeaf[]
             memory earnerLeaves = SetupPaymentsLib.createEarnerLeaves(
@@ -132,7 +132,7 @@ contract SetupPayments is Script {
             IRewardsCoordinator(coreDeployment.rewardsCoordinator),
             tokenLeaves,
             earnerLeaves,
-            helloWorldDeployment.strategy,
+            IRSDeployment.strategy,
             endTimestamp,
             numPayments,
             NUM_TOKEN_EARNINGS,
