@@ -23,7 +23,7 @@ let chainId = 31337;
 
 const avsDeploymentData = JSON.parse(
   fs.readFileSync(
-    path.resolve(__dirname, `../contracts/deployments/irs/${chainId}.json`),
+    path.resolve(__dirname, `../contracts/deployments/irs-avs/${chainId}.json`),
     "utf8"
   )
 );
@@ -39,8 +39,9 @@ const avsDirectoryAddress = coreDeploymentData.addresses.avsDirectory;
 const irsServiceManagerAddress = avsDeploymentData.addresses.irsServiceManager;
 const ecdsaStakeRegistryAddress = avsDeploymentData.addresses.stakeRegistry;
 const variableLendingPoolAddress =
-  avsDeploymentData.addresses.variableLendingPool;
-const fixedLendingPoolAddress = avsDeploymentData.addresses.fixedLendingPool;
+  avsDeploymentData.addresses.mockVariableLendingPool;
+const fixedLendingPoolAddress =
+  avsDeploymentData.addresses.mockFixedLendingPool;
 
 const delegationManagerABI = JSON.parse(
   fs.readFileSync(
@@ -56,7 +57,7 @@ const ecdsaRegistryABI = JSON.parse(
 );
 const irsServiceManagerABI = JSON.parse(
   fs.readFileSync(
-    path.resolve(__dirname, "../abis/irsServiceManager.json"),
+    path.resolve(__dirname, "../abis/IRSServiceManager.json"),
     "utf8"
   )
 );
@@ -109,13 +110,6 @@ const fixedLendingPool = new ethers.Contract(
 
 const registerOperator = async () => {
   try {
-    const isAlreadyRegistered = await irsManager.isOperatorRegistered(
-      wallet.address
-    );
-    if (isAlreadyRegistered) {
-      console.log("Operator already registered");
-      return;
-    }
     const tx1 = await delegationManager.registerAsOperator(
       {
         __deprecated_earningsReceiver: wallet.address,

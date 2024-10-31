@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start:operator": "ts-node operator/index.ts",
+    "start:operator": "ts-node operator/irsOperator.ts",
     "start:traffic": "ts-node operator/createNewTasks.ts",
     "start:anvil": "anvil",
     "deploy:core": "cd contracts && forge script script/DeployEigenLayerCore.s.sol --rpc-url http://localhost:8545 --broadcast",
