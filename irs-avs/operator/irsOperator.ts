@@ -197,15 +197,15 @@ async function handleSwapValidation(task: any, taskIndex: number) {
     margin: ethers.formatEther(margin),
   });
 
-  // const pool = isPayingFixed ? variableLendingPool : fixedLendingPool;
-  // const isValid = await verifyLoanPosition(user, pool, notionalAmount);
+  const pool = isPayingFixed ? variableLendingPool : fixedLendingPool;
+  const isValid = await verifyLoanPosition(user, pool, notionalAmount);
 
-  // if (isValid) {
-  // console.log("✅ Valid loan position");
-  await signAndRespondToTask(task, taskIndex);
-  // } else {
-  // console.log("❌ Invalid loan position");
-  // }
+  if (isValid) {
+    console.log("✅ Valid loan position");
+    await signAndRespondToTask(task, taskIndex);
+  } else {
+    console.log("❌ Invalid loan position");
+  }
 }
 
 async function handleMatchValidation(task: any, taskIndex: number) {
