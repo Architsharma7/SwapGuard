@@ -1,1 +1,1 @@
-# Thon
+# SwapGuard
